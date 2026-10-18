@@ -41,6 +41,17 @@ ACTIVE_X_MAX = 0.80
 ACTIVE_Y_MIN = 0.30
 ACTIVE_Y_MAX = 0.60
 
+SCROLL_START_THRESHOLD = 0.06
+SCROLL_STEP = 0.03
+
+scroll_active = False
+scroll_start_y = None
+scroll_last_y = None
+scroll_remainder = 0.0
+SCROLL_LOST_FRAMES = 5
+scroll_lost_frames = 0
+SCROLL_INTERVAL = 0.01
+last_scroll_time = 0.0
 
 while True:
     ret, frame = cap.read()
@@ -94,7 +105,84 @@ while True:
             middle_ratio = middle_length / palm_length
             pinch_ratio = distance / palm_length
 
-            if control_enabled:
+            # 人差し指、薬指、小指の伸び具合
+            def finger_ratio(tip, base):
+                return math.hypot(
+                    (hand[tip].x - hand[base].x) * width,
+                    (hand[tip].y - hand[base].y) * height
+                ) / palm_length
+
+            index_ratio = finger_ratio(8, 5)
+            ring_ratio = finger_ratio(16, 13)
+            pinky_ratio = finger_ratio(20, 17)
+
+            # 人差し指と中指だけ伸ばしているか
+            scroll_pose = (
+                index_ratio > 0.75
+                and middle_ratio > EXTEND_THRESHOLD
+                and ring_ratio < 0.65
+                and pinky_ratio < 0.65
+                and pinch_ratio > RELEASE_THRESHOLD
+            )
+
+
+            # 2本指の平均Y座標
+            scroll_y = (hand[8].y + hand[12].y) / 2
+
+
+            if control_enabled and click_state != "wait_release":
+
+                if scroll_pose:
+                    scroll_lost_frames = 0
+
+                    if scroll_start_y is None:
+                        scroll_start_y = scroll_y
+                        scroll_last_y = scroll_y
+
+                    elif not scroll_active:
+                        if abs(scroll_y - scroll_start_y) > SCROLL_START_THRESHOLD:
+                            scroll_active = True
+                            scroll_last_y = scroll_y
+                            click_state = "idle"
+                            print("スクロール開始")
+
+                    
+                    else:
+                        # スクロール開始位置からの移動量
+                        offset_y = scroll_y - scroll_start_y
+
+                        # 一定以上離れている間はスクロール
+                        if abs(offset_y) > SCROLL_START_THRESHOLD:
+                            now = time.monotonic()
+
+                            if now - last_scroll_time >= SCROLL_INTERVAL:
+
+                                if offset_y > 0:
+                                    pyautogui.scroll(-1)  # 下
+                                else:
+                                    pyautogui.scroll(1)   # 上
+
+                                last_scroll_time = now
+
+                else:
+                    scroll_lost_frames += 1
+                    scroll_last_y = None
+
+                    # 5フレーム連続で認識できなければ解除
+                    if scroll_lost_frames >= SCROLL_LOST_FRAMES:
+                        scroll_active = False
+                        scroll_start_y = None
+                        scroll_remainder = 0.0
+
+            else:
+                scroll_active = False
+                scroll_start_y = None
+                scroll_last_y = None
+                scroll_remainder = 0.0
+                scroll_lost_frames = 0
+            
+
+            if control_enabled and not scroll_active:
             
 
                 # 通常状態 → クリック準備
@@ -115,10 +203,18 @@ while True:
                     if pinch_ratio > RELEASE_THRESHOLD or middle_ratio < 0.65:
                         click_state = "idle"
                         print("通常状態に戻りました")
-            else:
+            elif not control_enabled:
                 click_state = "idle"
+
+
         else:
             click_state = "idle"
+            scroll_active = False
+            scroll_start_y = None
+            scroll_last_y = None
+            scroll_remainder = 0.0
+            scroll_lost_frames = 0
+
 
         
         
@@ -166,8 +262,7 @@ while True:
 
         # 操作が有効なときだけ移動
         
-        
-        if control_enabled and click_state != "wait_release":
+        if control_enabled and click_state != "wait_release" and not scroll_active:
             if smooth_x is None:
                 smooth_x = mouse_x
                 smooth_y = mouse_y
@@ -220,13 +315,21 @@ while True:
 
     if key == ord('q'):
         break
+
     if key == ord('m'):
         control_enabled = not control_enabled
         smooth_x = None
         smooth_y = None
         click_state = "idle"
 
+        scroll_active = False
+        scroll_start_y = None
+        scroll_last_y = None
+        scroll_remainder = 0.0
+
         print("カーソル操作:", "ON" if control_enabled else "OFF")
+
+    
 
 landmarker.close()
 cap.release()

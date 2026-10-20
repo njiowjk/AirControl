@@ -10,8 +10,6 @@ if not cap.isOpened():
     print("カメラを開けませんでした")
     exit()
 
-
-
 options = mp.tasks.vision.HandLandmarkerOptions(
     base_options=mp.tasks.BaseOptions(
         model_asset_path="models/hand_landmarker.task"
@@ -28,22 +26,17 @@ smooth_y = None
 MIN_ALPHA = 0.08
 MAX_ALPHA = 0.55
 FAST_DISTANCE = 120
-
 pyautogui.PAUSE = 0
 click_state = "idle"
 EXTEND_THRESHOLD = 0.75
 PINCH_THRESHOLD = 0.3
 RELEASE_THRESHOLD = 0.8
-
 ACTIVE_X_MIN = 0.20
 ACTIVE_X_MAX = 0.80
-
 ACTIVE_Y_MIN = 0.30
 ACTIVE_Y_MAX = 0.60
-
 SCROLL_START_THRESHOLD = 0.06
 SCROLL_STEP = 0.03
-
 scroll_active = False
 scroll_start_y = None
 scroll_last_y = None
@@ -52,10 +45,13 @@ SCROLL_LOST_FRAMES = 5
 scroll_lost_frames = 0
 SCROLL_INTERVAL = 0.01
 last_scroll_time = 0.0
+FIST_FRAMES = 6
+fist_frames = 0
+fist_triggered = False
+
 
 while True:
     ret, frame = cap.read()
-
     if not ret:
         print("画像を取得できませんでした")
         break
@@ -65,17 +61,12 @@ while True:
 
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    
-
     mp_image = mp.Image(
         image_format=mp.ImageFormat.SRGB,
         data=rgb
     )
     timestamp_ms = int(time.monotonic() * 1000)
     result = landmarker.detect_for_video(mp_image, timestamp_ms)
-
-    
-
 
     if result.hand_landmarks:
         hand = result.hand_landmarks[0]
@@ -89,7 +80,6 @@ while True:
         dy = (thumb_tip.y - middle_tip.y) * height
         distance = math.hypot(dx, dy)
 
-        
 
         middle_length = math.hypot(
         (middle_tip.x - middle_base.x) * width,
@@ -116,6 +106,33 @@ while True:
             ring_ratio = finger_ratio(16, 13)
             pinky_ratio = finger_ratio(20, 17)
 
+            # グーの判定
+            fist_pose = (
+                index_ratio < 0.6
+                and middle_ratio < 0.6
+                and ring_ratio < 0.6
+                and pinky_ratio < 0.6
+            )
+
+            if control_enabled and fist_pose:
+                fist_frames += 1
+
+                # グーのときは左クリックの準備を解除
+                click_state = "idle"
+
+                if fist_frames >= FIST_FRAMES and not fist_triggered:
+                    pyautogui.click(button="right")
+                    print("RIGHT CLICK")
+                    fist_triggered = True
+
+            else:
+                fist_frames = 0
+
+                # 人差し指を伸ばしたら次の右クリックを許可
+                if index_ratio > 0.75:
+                    fist_triggered = False
+
+
             # 人差し指と中指だけ伸ばしているか
             scroll_pose = (
                 index_ratio > 0.75
@@ -125,10 +142,8 @@ while True:
                 and pinch_ratio > RELEASE_THRESHOLD
             )
 
-
             # 2本指の平均Y座標
             scroll_y = (hand[8].y + hand[12].y) / 2
-
 
             if control_enabled and click_state != "wait_release":
 
@@ -182,7 +197,7 @@ while True:
                 scroll_lost_frames = 0
             
 
-            if control_enabled and not scroll_active:
+            if control_enabled and not scroll_active and not fist_pose:
             
 
                 # 通常状態 → クリック準備
@@ -215,10 +230,6 @@ while True:
             scroll_remainder = 0.0
             scroll_lost_frames = 0
 
-
-        
-        
-        
 
         # 関節同士を線でつなぐ
         for connection in connections:
@@ -262,7 +273,7 @@ while True:
 
         # 操作が有効なときだけ移動
         
-        if control_enabled and click_state != "wait_release" and not scroll_active:
+        if control_enabled and click_state != "wait_release" and not scroll_active and not fist_pose:
             if smooth_x is None:
                 smooth_x = mouse_x
                 smooth_y = mouse_y
@@ -321,7 +332,6 @@ while True:
         smooth_x = None
         smooth_y = None
         click_state = "idle"
-
         scroll_active = False
         scroll_start_y = None
         scroll_last_y = None
